@@ -1,0 +1,286 @@
+---
+title: "NBA Data Analysis"
+author: "Brian Sun"
+date: "9/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Some useful libraries
+library(car)
+library(rvest)
+require(boot)
+```
+
+Daryl Morey is one of the coolest people in basketball. General manager of the Houston Rockets, he never played basektball even at the college level. Instead, he's known for co-founding the MIT Sloan Sports Analytics Conference and pioneering the use of models and analytics in basketball. In this report, we will look at many facets of the NBA, including how offense and defense are correlated, how the game has sped up from 2000 to 2018, how the conferences are different from each other, and how we can try to predict the number of wins an NBA team will have based on advanced statistics about the team.
+
+Let's first set the years we want data from.
+```{r}
+BEGIN = 2000
+END = 2019
+```
+
+We will be getting most of our data from Basketball-Reference, which is already formatted well. All of the data will be downloaded as .csv, so the dataframe will simply be read in as .csv files. There won't be any holes in the data, as all of these "advanced statistics" are tracked back to 1984. Only data from the 1999-2000 season and onwards will be used, as the pace of the game and use of the 3 point line has changed significantly since the 80s and 90s. 
+
+```{r}
+# Get basic team data from each season, loop through every of saved data from Basketball-Reference and get the most useful columns, clean the names portion of the data
+results <- data.frame()
+for (i in BEGIN:END) {
+  index = i - (BEGIN - 1)
+  temp <- read.csv(sprintf("%d_data.csv", i))
+  # Remove the last row, which is league average
+  temp <- head(temp, -1)
+  
+  # Remove the asterisk at the end of playoff team names
+  temp$Team <- gsub("\\*$", "", temp$Team)
+  temp$Year <- as.numeric(rep(i, nrow(temp)))
+
+  # Merge dataframe
+  results <- rbind(results, temp)
+}
+dim(results)
+names(results)
+attach(results)
+```
+
+We end up with 595 rows of data, each representing a season of a team, which should be more than enough to run some interesting analysis. 
+
+This year, many teams that have strong offenses also have strong defenses. To see how this holds up, we can do a correlation between offensive rating (based on points per possession) and defensive rating (based on points given up per possession). A higher offensive rating is better, and a lower defensive rating is better. We will do a correlation between the two and a bootstrapped correlation as well. First, we make a scatterplot.
+
+```{r}
+# Scatterplot of the two
+plot(ORtg, DRtg,
+     main="Defensive Rating vs. Offensive Rating",
+     xlab="Offensive Rating",
+     ylab="Defensive Rating",
+     pch=19,
+     col="blue")
+```
+From the scatterplot, it seems like there is minimal correlation between offensive and defensive rating, although there might be some sort of a positive slope between the two. We can do the correlation test now.
+
+```{r}
+# Correlation test
+cor.test(ORtg, DRtg)
+```
+The p-value of 0.0001 is significant for an alpha of .05. We get a correlation of approximatley 0.156, which seems to show that as offense gets better (and vice versa), defense gets slightly worse. This could be explained by the fact that teams that exert a lot of engery have offense have less left in the tank for defense. A prime example of this phenomenon is the 1983-84 Denver Nuggets. They scored a league-leading 123.7 points per game (which would still lead the league by 5 ppg last season), but gave up a league worst 124.8 points per game. 
+
+
+Adding the line yields the following scatterplot:
+```{r}
+lm1 <- lm(ORtg ~ DRtg)
+plot(ORtg, DRtg, 
+     main="DRtg vs. ORtg with Regression Line",
+     xlab="Offensive Rating",
+     ylab="Defensive Rating",
+     pch = 19, 
+     col="blue")
+
+#By default, abline() assumes we provide slope and intercept, which is what is contained in lm1$coef
+abline(lm1$coef, col="red", lwd=3)
+```
+
+A bootstrapped correlation should give a similar result:
+```{r}
+# Get number of rows
+N <- length(DRtg)
+n_samp <- 10000
+
+corResults <- rep(NA, n_samp)
+for (i in 1:n_samp) {
+  s <- sample(1:N, N, replace=T)
+  sVals <- as.numeric(names(table(s)))
+  sCounts <- as.vector(table(s))
+  
+  fakeD <- rep(DRtg[sVals], sCounts)
+  fakeO <- rep(ORtg[sVals], sCounts)
+  
+  cor1 <- cor(fakeD, fakeO)
+  corResults[i] <- cor1
+}
+
+# Graph the correlations
+ci_r <- quantile(corResults, c(.025, .975))
+hist(corResults, col = "blue", main = "Bootstrapped Correlations", xlab = "Sample Correlation", breaks = 50)
+abline(v = ci_r, lwd = 3, col = "red")
+abline(v = cor.test(DRtg, ORtg)$conf.int,lwd = 3, col = "green", lty = 2)
+```
+
+The red lines show the 95% confidence interval for the bootstrap, while the green dotted lines show the 95% confidence interval for the correlation test. In this case, the bootstrapped confidence interval also doesn't include 0, so it also found a statistically significant correlation between offense and defensive rating. Generally, the bootstrap is more flexible, and seeing as computers are getting more and more powerful, these tests are becoming more and more common.
+
+Another feature to investigate is the pace of the game, which is roughly how fast possessions change. People have long argued that the game has sped up since 2000. It's easy to check with a t-test on pace, which is an estimate of the number of possessions per 48 minutes. 
+```{r}
+pace_2000 <- results[results$Year == 2000, "Pace"]
+pace_2019 <- results[results$Year == 2019, "Pace"]
+
+(mean(pace_2019) - mean(pace_2000))
+```
+
+A difference of almost 7 possessions per game is absolutely significant since each possession can take up to 25 seconds and the entire game is only 48 minutes. We can do a t-test to find out. First, we can take a look at the distribution of the pace in both years.
+
+```{r}
+hist(pace_2000,
+     main="Histogram of Team Paces in 2000",
+     xlab="Pace for Teams",
+     breaks=10,
+     col="red")
+hist(pace_2019,
+     main="Histogram of Team Paces in 2019",
+     xlab="Pace for Teams",
+     breaks=10,
+     col="red")
+```
+With a sizeable sample of 30 teams, it seems like the assumptions for the t-test can be generally met (the Central Limit Theorem may work its magic a little). The distributions are generally symmetric and seem somehwat more clustered at center. We then run the t-test. 
+```{r}
+t.test(pace_2019, pace_2000)
+```
+
+The t-test result has a p-value of almost 0, which definitively shows that the pace of the game has sped up from 2000 to 2019. In general, we could also run a non-parametric Kruskal-Wallis tests that requires no assumptions on the underlying distribution of the data. 
+
+```{r}
+kruskal.test(list(pace_2000, pace_2019))
+```
+In this case as well, we can safely conclude that there is strong evidence that the pace has increased from 2000 to 2019.
+
+We can start off with a simple stepwise backwards regression. Beginning with all of the factors, we remove the least significant one until there are only significant factors left. The process is done manually, and we end up with a far more simplified model than the 19 original factors.
+```{r}
+# Create temporary dataframe for multiple regression that removes useless variables and brings wins to the frong
+results1 <- results[, c(-1,-2,-4, -5, -6, -7, -13, -26, -28, -29)]
+results1 <- results1[, c(2:19, 1)]
+
+# Original model with all predictors
+lm1 <- lm(W ~ MOV + SOS + ORtg + DRtg + Pace + FTr + X3PAr + TS. + eFG. + TOV. + ORB. + FT.FGA + eFG..1 + TOV..1 + DRB. + FT.FGA.1 + Attend. +           Age, data=results1)
+summary(lm1)
+
+# After backwards stepwise regression
+backwards <- lm(W ~ MOV + ORtg + eFG..1 + TOV..1 + DRB. + FT.FGA.1 + Attend. + Age, data=results1)
+summary(backwards)
+```
+The backwards stepwise regression gives a model with 8 predictors iwth an R^2 of about 0.93, which is quite a good amount. We can try to use best subsets regression to find a better model. For this, we go up to a maximum model of 12 predictors. 
+```{r}
+library(leaps)
+
+# Create temporary dataframe for best subsets regression that removes useless variables and brings wins to the frong
+results1 <- results[, c(-1,-2,-4, -5, -6, -7, -13, -26, -28, -29)]
+results1 <- results1[, c(2:19, 1)]
+
+# Get best subsets results - max 12 variables
+mod1 <- regsubsets(W ~ ., data=results1, nvmax=12)
+(mod1sum <- summary(mod1))
+```
+
+Now we can determine which one of these is the best model with respect to measures including the Adjusted R-Squared and Bayesian information criterion (BIC).
+
+First, with the Adjusted R-Squared.
+```{r}
+#Fit this model and show results
+AR <- results1[,mod1sum$which[which.max(mod1sum$adjr2),][-1]]
+summary(lm(W ~ .,data=AR))
+```
+Even though the adjusted R-squared result is adjusted for the number of predictors in the model, it seems like it still chose the subset of regressors that was the largest, which in this case was 12. We can try the BIC instead, and see if it selects a model that is smaller and easier to interpret.
+
+```{r}
+#Fit the model with the best bic
+AR <- results1[, mod1sum$which[which.min(mod1sum$bic),][-1]]
+mod2 <- lm(W ~ ., data=AR)
+summary(mod2)
+```
+The three variables that remain have p values of almost 0, and the model accounts for 93 of the variance of wins around the mean. The distinct three variables are interesting. 
+* Attendance can be seen as a proxy variable for the size of the market that the team is in. It's always been a trend that top free agents often head towards the largest markets, as they increase their marketability there. This regression seems to confirm such a bias.
+* Age being positive is also unsurprising. It is rare for young teams to perform well as most of the players are inexperienced (save for a few exceptions like OKC 7-8 years ago). Teams usually need some sort of veteran presence (33+ years old) to perform well, and most championship teams had their fair share of older people.
+* MOV stands for margin of victory, which is the average amount a team beat its opponents by in a season. This is a good measure of how strong a team is in general; it probably takes into account other variables like offensive rating, defensive rating, true shooting percentage, turnover percent, etc. It's not surprising at all that this statistic is in there. 
+
+If we didn't care as much about inference, we could try to use ridge regression and the LASSO to regularize the coefficients so that they could be used on new datasets. We could see how our model works with the 2019-2020 season. I will only choose some of the possible factors for ridge regression - the code is more or less proof of concept. 
+
+```{r}
+# Used for ridge regression
+library(glmnet)
+
+# Generate a list of hyperparameters for L2 regularization
+lambdas <- 10^seq(3, -2, by = -.1)
+
+# cv.glmnet() finds the best lambda through checking all of the values we provided via cross-validation
+fit <- cv.glmnet(as.matrix(results1[, c(1, 4, 10, 15, 16, 17, 18, 19)]), W, alpha=0, lambda=lambdas)
+
+# This gives a collection of all of the fit models
+summary(fit$glmnet.fit)
+
+# Get R^2
+(optimal <- fit$lambda.min)
+y <- predict(fit, s=optimal, newx=as.matrix(results1[, c(1, 4, 10, 15, 16, 17, 18, 19)]))
+sst <- sum((y - mean(y))^2)
+sse <- sum((W - y)^2)
+(rsq <- 1 - sse / sst)
+
+# Get the coefficients
+(coeffs <- coef(fit, s=optimal))
+```
+In this case, it seems that the R^2 value on the training data has not really changed, mostly because the optimal regularization lambda was so close to 0. In other contexts with a larger lambda, more shrinkage of the parameters would probably decrease R^2 somehwat. Looking at the coefficients, since the optimal lambda is so low, they aren't that much lower than what they were for the backwards stepwise regression (both of these models used the same factors). 
+
+Now, we will try run the lasso, which uses L1 regularization. With the lasso, it's possible to conclude that certain betas should be equal to zero, essentially taking out factors form the model. Most of the code will be extremely similar to that of before, except that we can set alpha=1 as that's the coefficient of the L1 term in the glmnet(). 
+```{r}
+# Generate a list of hyperparameters for L2 regularization
+lambdas <- 10^seq(3, -2, by = -.1)
+
+# cv.glmnet() finds the best lambda through checking all of the values we provided via cross-validation
+fit <- cv.glmnet(as.matrix(results1), W, alpha=1, lambda=lambdas)
+
+# This gives a collection of all of the fit models
+summary(fit$glmnet.fit)
+
+# Get R^2
+(optimal <- fit$lambda.min)
+y <- predict(fit, s=optimal, newx=as.matrix(results1))
+sst <- sum((y - mean(y))^2)
+sse <- sum((W - y)^2)
+(rsq <- 1 - sse / sst)
+
+# Get the coefficients
+(coeffs <- coef(fit, s=optimal))
+```
+We can see that in this case, the lasso selected the following factors: MOV, ORtg, FTr, FT.FGA, Attend., and Age. Recall that the best model from best subsets regression contained MOV, Attend., and Age; all three were selected by the lasso. For good predictive power, this model would probably used for test data. 
+
+
+For another way to visualize the data, we can first do a Principal Components Analysis (PCA). In essence, PCA applies a linear transformation to the data such that an orthogonal basis is formed such that each principal component captures as much variance in the data as possible. For physics people, think of the principal axis theorem. To do so, we drop the non-numerical data and other redundant columns.
+
+```{r}
+pca_df <- results[, c(-1, -2, -5, -6, -7, -8, -26, -28, -29)]
+pca <- prcomp(pca_df, center=TRUE, scale=TRUE)
+summary(pca)
+```
+We can plot the two largest principal components and see where the points land.
+```{r}
+library(devtools)
+install_github("vqv/ggbiplot")
+library(ggbiplot)
+ggbiplot(pca, ellipse=TRUE, group=results[, "Team"])
+```
+
+It's difficult to see much on the graph, but it's important as we've seen earlier that approximately 6-7 principal components can cover over 80% of variance.
+
+Using the principal components, we can do principal components regression, where we choose some of the principal components as regressors. In this way, we can achieve dimensionality reduction , avoid multicollinearity, and cause reduce overfitting (theoretically). 
+```{r}
+require(pls)
+pcr_model <- pcr(W ~ ., data=results1, scale=TRUE, validation="CV")
+summary(pcr_model)
+
+# Plot cross validation MSE and R^2
+validationplot(pcr_model, val.type="MSEP")
+validationplot(pcr_model, val.type="R2")
+```
+
+In this case we can see that we really only need 3 principal components to capture a majority of the variance of the data, and that adding more principal components does little at the expense of a far more complex model. 
+
+We could also try to run some non-parametric regressions to maximize our predictive power. In this case, we will take a look at many methods with splines. We will just use one parameter, Age, which was one of the most significant predictors when used for best subsets regression. We use first do a cubic spline the smoothing splines function, which means that we won't need to select the locations of the knots if we used a function like cubic splines. 
+```{r}
+library(splines)
+spline_res <- smooth.spline(Age, W, cv=TRUE)
+spline_res
+# It selected lambda = 0.01, df = 5.9, plot it
+plot(Age, W, col="grey")
+lines(spline_res, lwd=2, col="purple")
+legend("topright", ("Smoothing Splines with 6.78 df selected by CV"), col="purple", lwd=2)
+```
+
+We see that when regressing Age on wins, the spline fines a non-lienar fit that tapers off at the end. This could be a little better than a simple linear regression, but the improvement in this case sholdn't be much. 
