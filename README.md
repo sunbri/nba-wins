@@ -1,5 +1,5 @@
 # nba-wins
-Various statistical methods used to analyze NBA data and see what factors affect wins. The knitted R Markdown file can be seen [here](https://sunbri.github.io/nba-wins/docs). Here's a quick survey of the regression methods that were used. 
+Various statistical methods used to analyze NBA data and see what factors affect wins. The knitted R Markdown file can be seen [here](https://sunbri.github.io/nba-wins). Here's a quick survey of the regression methods that were used. 
 
 * Boostrapping
 * Backwards Stepwise Regression 
