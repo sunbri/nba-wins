@@ -6,6 +6,7 @@ Various statistical methods used to analyze NBA data and see what factors affect
 * Best Subsets Regression
 * Ridge Regression
 * LASSO
+* Least Angle Regression
 * Principal Components Analysis
 * Principal Components Regression
 * Spline Regression
